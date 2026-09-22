@@ -2,6 +2,11 @@ import express from "express";
 import { requireAuth } from "../middleware/authMiddleware.js";
 import { notifyAssignmentCompleted } from "../services/notificationService.js";
 import prisma from "../prisma.js";
+import { 
+  combineDueDateTime, 
+  calculateAssignmentRisk, 
+  attachRiskToAssignment 
+} from "../services/riskService.js";
 
 const router = express.Router();
 
@@ -45,7 +50,8 @@ router.get("/", requireAuth, async (req, res) => {
       ]
     });
 
-    res.json({ assignments });
+    const assignmentsWithRisk = assignments.map(a => attachRiskToAssignment(a, new Date()));
+    res.json({ assignments: assignmentsWithRisk });
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch assignments", details: err.message });
   }
@@ -72,7 +78,8 @@ router.get("/completed", requireAuth, async (req, res) => {
       }
     });
 
-    res.json({ assignments: completedAssignments });
+    const completedWithRisk = completedAssignments.map(a => attachRiskToAssignment(a, new Date()));
+    res.json({ assignments: completedWithRisk });
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch completed assignments", details: err.message });
   }
@@ -103,9 +110,92 @@ router.get("/:id", requireAuth, async (req, res) => {
       return res.status(404).json({ error: "Assignment not found" });
     }
 
-    res.json({ assignment });
+    res.json({ assignment: attachRiskToAssignment(assignment, new Date()) });
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch assignment details", details: err.message });
+  }
+});
+
+/**
+ * POST /api/assignments
+ * Create a new assignment.
+ */
+router.post("/", requireAuth, async (req, res) => {
+  const {
+    title,
+    description,
+    dueDate,
+    dueTime,
+    difficulty,
+    estimatedMinutes,
+    priority,
+    courseId,
+    notes,
+  } = req.body;
+
+  if (!title || !title.trim()) {
+    return res.status(400).json({ error: "Assignment title is required" });
+  }
+
+  try {
+    let targetCourseId = courseId;
+    if (!targetCourseId) {
+      const firstCourse = await prisma.course.findFirst({ where: { userId: req.user.id } });
+      if (!firstCourse) {
+        return res.status(400).json({ error: "No course found. Please connect Google Classroom or create a course." });
+      }
+      targetCourseId = firstCourse.id;
+    }
+
+    const combinedDueDate = combineDueDateTime(dueDate || new Date(), dueTime || "23:59");
+    const diff = Math.max(1, Math.min(5, parseInt(difficulty, 10) || 3));
+    const est = Math.max(15, parseInt(estimatedMinutes, 10) || 180);
+    const prio = ["LOW", "MEDIUM", "HIGH", "URGENT"].includes(priority) ? priority : "MEDIUM";
+
+    const initialRisk = calculateAssignmentRisk({
+      dueDate: combinedDueDate,
+      dueTime: dueTime || "23:59",
+      difficulty: diff,
+      estimatedMinutes: est,
+    }, new Date());
+
+    const created = await prisma.assignment.create({
+      data: {
+        title: title.trim(),
+        description: description ? description.trim() : null,
+        dueDate: combinedDueDate || new Date(),
+        dueTime: dueTime || "23:59",
+        difficulty: diff,
+        estimatedMinutes: est,
+        priority: prio,
+        status: "PENDING",
+        deadlineRisk: initialRisk.riskLevel,
+        isLocallyEdited: true,
+        notes: notes || null,
+        courseId: targetCourseId,
+        userId: req.user.id,
+      },
+      include: {
+        course: true,
+        microTasks: true,
+      }
+    });
+
+    const assignmentWithRisk = attachRiskToAssignment(created, new Date());
+
+    const io = req.app.get("io");
+    if (io) {
+      io.to(req.user.id).emit("assignment:created", { assignment: assignmentWithRisk });
+      io.to(req.user.id).emit("productivity:updated");
+    }
+
+    res.status(201).json({
+      success: true,
+      assignment: assignmentWithRisk,
+    });
+  } catch (err) {
+    console.error("Create assignment error:", err);
+    res.status(500).json({ error: "Failed to create assignment", details: err.message });
   }
 });
 
@@ -145,12 +235,29 @@ router.patch("/:id", requireAuth, async (req, res) => {
 
     if (title !== undefined && title.trim()) updateData.title = title.trim();
     if (description !== undefined) updateData.description = description.trim();
-    if (dueDate) updateData.dueDate = new Date(dueDate);
-    if (dueTime) updateData.dueTime = dueTime;
+    
+    const targetDueTime = dueTime !== undefined ? dueTime : existing.dueTime;
+    if (dueTime !== undefined) updateData.dueTime = dueTime;
+
+    if (dueDate) {
+      const combined = combineDueDateTime(dueDate, targetDueTime);
+      updateData.dueDate = combined || new Date(dueDate);
+    } else if (dueTime !== undefined && existing.dueDate) {
+      const combined = combineDueDateTime(existing.dueDate, dueTime);
+      updateData.dueDate = combined || existing.dueDate;
+    }
+
     if (difficulty !== undefined) updateData.difficulty = Math.max(1, Math.min(5, parseInt(difficulty, 10)));
     if (estimatedMinutes !== undefined) updateData.estimatedMinutes = Math.max(15, parseInt(estimatedMinutes, 10));
     if (priority && ["LOW", "MEDIUM", "HIGH", "URGENT"].includes(priority)) updateData.priority = priority;
     if (notes !== undefined) updateData.notes = notes;
+
+    // Recalculate risk on update and store
+    const risk = calculateAssignmentRisk({
+      ...existing,
+      ...updateData,
+    }, new Date());
+    updateData.deadlineRisk = risk.riskLevel;
 
     const updated = await prisma.assignment.update({
       where: { id },
@@ -161,17 +268,19 @@ router.patch("/:id", requireAuth, async (req, res) => {
       }
     });
 
+    const assignmentWithRisk = attachRiskToAssignment(updated, new Date());
+
     // 3. Emit real-time Socket.IO event if available
     const io = req.app.get("io");
     if (io) {
-      io.to(req.user.id).emit("assignment:updated", { assignment: updated });
+      io.to(req.user.id).emit("assignment:updated", { assignment: assignmentWithRisk });
       io.to(req.user.id).emit("productivity:updated");
     }
 
     res.json({
       success: true,
       message: "Assignment updated locally",
-      assignment: updated,
+      assignment: assignmentWithRisk,
     });
   } catch (err) {
     console.error("Update assignment error:", err);
@@ -226,6 +335,8 @@ router.patch("/:id/status", requireAuth, async (req, res) => {
       }
     });
 
+    const assignmentWithRisk = attachRiskToAssignment(updated, new Date());
+
     // Emit real-time Socket.IO event
     const io = req.app.get("io");
     if (io) {
@@ -234,14 +345,14 @@ router.patch("/:id/status", requireAuth, async (req, res) => {
         status: updated.status,
         completedAt: updated.completedAt,
         startedAt: updated.startedAt,
-        assignment: updated,
+        assignment: assignmentWithRisk,
       });
       io.to(req.user.id).emit("productivity:updated");
 
       if (status === "COMPLETED") {
         await notifyAssignmentCompleted({
           userId: req.user.id,
-          assignment: updated,
+          assignment: assignmentWithRisk,
           io,
         });
       }
@@ -250,7 +361,7 @@ router.patch("/:id/status", requireAuth, async (req, res) => {
     res.json({
       success: true,
       message: status === "COMPLETED" ? "Marked as completed" : "Restored to active workload",
-      assignment: updated,
+      assignment: assignmentWithRisk,
     });
   } catch (err) {
     console.error("Change status error:", err);

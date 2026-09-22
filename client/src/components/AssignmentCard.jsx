@@ -14,7 +14,13 @@ import {
   ExternalLink,
   Tag
 } from "lucide-react";
-import { format, isPast } from "date-fns";
+import { format } from "date-fns";
+import { 
+  getResolvedRisk, 
+  RISK_THEMES, 
+  formatTimeRemaining, 
+  combineDueDateTime 
+} from "../utils/riskUtils.js";
 
 export default function AssignmentCard({ 
   assignment, 
@@ -41,8 +47,10 @@ export default function AssignmentCard({
   }, [menuOpen]);
 
   const isCompleted = assignment.status === "COMPLETED";
-  const dueDateObj = new Date(assignment.dueDate);
-  const isOverdue = !isCompleted && isPast(dueDateObj);
+  const risk = getResolvedRisk(assignment);
+  const isOverdue = !isCompleted && (assignment.isOverdue !== undefined ? assignment.isOverdue : risk.isOverdue);
+  const dueDateObj = combineDueDateTime(assignment.dueDate, assignment.dueTime) || new Date(assignment.dueDate);
+  const currentRiskTheme = RISK_THEMES[risk.riskLevel] || RISK_THEMES.LOW;
 
   const priorityColors = {
     LOW: "bg-slate-100 dark:bg-slate-800/80 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700",
@@ -51,23 +59,18 @@ export default function AssignmentCard({
     URGENT: "bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800/60",
   };
 
-  const riskColors = {
-    LOW: "text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/50",
-    MODERATE: "text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800/50",
-    HIGH: "text-orange-700 dark:text-orange-400 bg-orange-50 dark:bg-orange-950/40 border-orange-200 dark:border-orange-800/50",
-    CRITICAL: "text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/50 border-rose-200 dark:border-rose-800/50",
-  };
-
   const subjectCode = assignment.course?.code || "COURSE";
   const subjectName = assignment.course?.name || "Academic Subject";
 
   return (
-    <div className={`relative glass-card rounded-2xl p-4 sm:p-5 group flex flex-col justify-between ${
+    <div className={`relative glass-card rounded-2xl p-4 sm:p-5 group flex flex-col justify-between transition-all ${
       isCompleted 
         ? "border-emerald-500/40 dark:border-emerald-500/30 opacity-90" 
-        : isOverdue 
-          ? "border-rose-500/50 dark:border-rose-500/40 shadow-rose-500/10" 
-          : ""
+        : isOverdue || risk.riskLevel === "CRITICAL"
+          ? "border-rose-500/60 dark:border-rose-500/50 shadow-lg shadow-rose-500/10 ring-1 ring-rose-500/20" 
+          : risk.riskLevel === "HIGH"
+            ? "border-orange-400/50 dark:border-orange-500/40 shadow-sm"
+            : ""
     }`}>
       
       {/* Top Header: Subject Code, Subject Name & Action Menu */}
@@ -212,20 +215,34 @@ export default function AssignmentCard({
             </span>
           </div>
 
-          <div className="flex items-center gap-1 text-slate-500 dark:text-slate-400">
-            <Clock className="w-3.5 h-3.5" />
-            <span>{+(assignment.estimatedMinutes / 60).toFixed(1)}h</span>
+          <div className="flex items-center gap-2">
+            {!isCompleted && (
+              <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-md ${
+                isOverdue 
+                  ? "bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300 font-bold animate-pulse" 
+                  : risk.riskLevel === "CRITICAL"
+                    ? "bg-rose-50 text-rose-600 dark:bg-rose-950/40 dark:text-rose-400 font-medium"
+                    : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
+              }`}>
+                {formatTimeRemaining(risk.remainingMinutes, isOverdue)}
+              </span>
+            )}
+            <div className="flex items-center gap-1 text-slate-500 dark:text-slate-400">
+              <Clock className="w-3.5 h-3.5" />
+              <span>{+(assignment.estimatedMinutes / 60).toFixed(1)}h</span>
+            </div>
           </div>
         </div>
 
         {/* Badges: Priority & Risk & Status */}
-        <div className="flex items-center flex-wrap gap-1.5 mb-3">
+        <div className="flex items-center flex-wrap gap-1.5 mb-2.5">
           <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-full border ${priorityColors[assignment.priority] || priorityColors.MEDIUM}`}>
             {assignment.priority}
           </span>
 
-          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${riskColors[assignment.deadlineRisk] || riskColors.LOW}`}>
-            Risk: {assignment.deadlineRisk}
+          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border flex items-center gap-1.5 ${currentRiskTheme.badge}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${currentRiskTheme.dot} ${risk.riskLevel === "CRITICAL" ? "animate-ping" : ""}`} />
+            Risk: {risk.riskLevel} • {risk.riskScore}%
           </span>
 
           {/* Status Badge */}
@@ -239,6 +256,25 @@ export default function AssignmentCard({
             {assignment.status.replace("_", " ")}
           </span>
         </div>
+
+        {/* "Why this risk?" Explanation Banner */}
+        {risk.reason && !isCompleted && (
+          <div 
+            title={risk.reason}
+            className={`mb-2.5 px-2.5 py-1.5 rounded-xl text-[11px] leading-snug flex items-center gap-1.5 border transition-all ${
+              risk.riskLevel === "CRITICAL" 
+                ? "bg-rose-50/80 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 border-rose-200/80 dark:border-rose-900/40"
+                : risk.riskLevel === "HIGH"
+                  ? "bg-orange-50/80 dark:bg-orange-950/30 text-orange-700 dark:text-orange-300 border-orange-200/80 dark:border-orange-900/40"
+                  : risk.riskLevel === "MEDIUM"
+                    ? "bg-amber-50/70 dark:bg-amber-950/20 text-amber-800 dark:text-amber-300 border-amber-200/60 dark:border-amber-900/30"
+                    : "bg-slate-50 dark:bg-slate-800/40 text-slate-600 dark:text-slate-400 border-slate-200/60 dark:border-slate-800/60"
+            }`}
+          >
+            <AlertCircle className={`w-3.5 h-3.5 shrink-0 ${risk.riskLevel === 'CRITICAL' ? 'text-rose-500 animate-pulse' : risk.riskLevel === 'HIGH' ? 'text-orange-500' : 'text-slate-400'}`} />
+            <span className="truncate">{risk.reason}</span>
+          </div>
+        )}
 
         {/* Bottom Actions: [Mark as Done] button + Quick Info */}
         <div className="flex items-center justify-between gap-2 pt-1">

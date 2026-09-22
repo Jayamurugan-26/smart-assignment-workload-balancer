@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
-import { X, Save, AlertCircle, Clock, Calendar, ShieldCheck, Tag } from "lucide-react";
+import { X, Save, AlertCircle, Clock, Calendar, ShieldCheck, Tag, Flame } from "lucide-react";
 import { format } from "date-fns";
+import { calculateClientRisk, RISK_THEMES } from "../utils/riskUtils.js";
 
 export default function EditAssignmentModal({ assignment, isOpen, onClose, onSave }) {
   if (!isOpen || !assignment) return null;
@@ -61,6 +62,16 @@ export default function EditAssignmentModal({ assignment, isOpen, onClose, onSav
       setIsSubmitting(false);
     }
   };
+
+  const liveRisk = calculateClientRisk({
+    dueDate: formData.dueDate,
+    dueTime: formData.dueTime,
+    estimatedMinutes: formData.estimatedMinutes,
+    difficulty: formData.difficulty,
+    priority: formData.priority,
+    status: assignment.status
+  });
+  const liveTheme = RISK_THEMES[liveRisk.riskLevel] || RISK_THEMES.LOW;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-in fade-in duration-200">
@@ -209,6 +220,30 @@ export default function EditAssignmentModal({ assignment, isOpen, onClose, onSav
               <span>6h</span>
               <span>12h</span>
             </div>
+          </div>
+
+          {/* Live Calculated Risk Preview */}
+          <div className={`p-3 rounded-2xl border transition-all ${
+            liveRisk.riskLevel === "CRITICAL"
+              ? "bg-rose-50/80 dark:bg-rose-950/30 border-rose-200 dark:border-rose-900/40 text-rose-800 dark:text-rose-200"
+              : liveRisk.riskLevel === "HIGH"
+                ? "bg-orange-50/80 dark:bg-orange-950/30 border-orange-200 dark:border-orange-900/40 text-orange-800 dark:text-orange-200"
+                : liveRisk.riskLevel === "MEDIUM"
+                  ? "bg-amber-50/80 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900/40 text-amber-800 dark:text-amber-200"
+                  : "bg-emerald-50/80 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900/40 text-emerald-800 dark:text-emerald-200"
+          }`}>
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <span className="text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5">
+                <Flame className="w-3.5 h-3.5" />
+                Live Deadline Risk Preview
+              </span>
+              <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md border ${liveTheme.badge}`}>
+                {liveRisk.riskLevel} • {liveRisk.riskScore}%
+              </span>
+            </div>
+            <p className="text-xs leading-relaxed opacity-95">
+              {liveRisk.reason}
+            </p>
           </div>
 
           {/* Personal Notes */}

@@ -1,5 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import prisma from "../prisma.js";
+import { calculateAssignmentRisk } from "./riskService.js";
 
 /**
  * Get configured GoogleGenAI instance.
@@ -130,24 +131,32 @@ export async function chatWithGemini({ userId, message, history = [], context = 
   });
 
   const now = new Date();
-  const assignmentsContext = studentAssignments.map(a => ({
-    id: a.id,
-    title: a.title,
-    course: a.course?.name || "General Course",
-    code: a.course?.code || "",
-    dueDate: a.dueDate ? a.dueDate.toISOString().split("T")[0] : null,
-    dueTime: a.dueTime || "23:59",
-    status: a.status,
-    priority: a.priority,
-    difficulty: a.difficulty,
-    estimatedMinutes: a.estimatedMinutes,
-    deadlineRisk: a.deadlineRisk,
-    description: a.description,
-    notes: a.notes,
-    hasAttachments: Boolean(a.driveAttachments && a.driveAttachments !== "[]"),
-    microTasksCount: a.microTasks?.length || 0,
-    completedMicroTasks: a.microTasks?.filter(m => m.completed).length || 0,
-  }));
+  const assignmentsContext = studentAssignments.map(a => {
+    const risk = calculateAssignmentRisk(a, now);
+    return {
+      id: a.id,
+      title: a.title,
+      course: a.course?.name || "General Course",
+      code: a.course?.code || "",
+      dueDate: a.dueDate ? a.dueDate.toISOString().split("T")[0] : null,
+      dueTime: a.dueTime || "23:59",
+      status: a.status,
+      priority: a.priority,
+      difficulty: a.difficulty,
+      estimatedMinutes: a.estimatedMinutes,
+      deadlineRisk: risk.riskLevel,
+      riskScore: risk.riskScore,
+      remainingHours: risk.remainingHours,
+      isOverdue: risk.isOverdue,
+      isDueToday: risk.isDueToday,
+      riskReason: risk.reason,
+      description: a.description,
+      notes: a.notes,
+      hasAttachments: Boolean(a.driveAttachments && a.driveAttachments !== "[]"),
+      microTasksCount: a.microTasks?.length || 0,
+      completedMicroTasks: a.microTasks?.filter(m => m.completed).length || 0,
+    };
+  });
 
   const activeAssignments = assignmentsContext.filter(a => a.status !== "COMPLETED");
   const completedAssignments = assignmentsContext.filter(a => a.status === "COMPLETED");

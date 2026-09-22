@@ -23,6 +23,7 @@ export default function WorkloadHeatmap({
   const riskBadge = {
     LOW: { label: "Safe Workload", bg: "bg-emerald-950/40 text-emerald-400 border-emerald-800/50" },
     MODERATE: { label: "Moderate Density", bg: "bg-amber-950/40 text-amber-400 border-amber-800/50" },
+    MEDIUM: { label: "Moderate Density", bg: "bg-amber-950/40 text-amber-400 border-amber-800/50" },
     HIGH: { label: "High Burnout Risk", bg: "bg-orange-950/40 text-orange-400 border-orange-800/50" },
     CRITICAL: { label: "Critical Overload Peak", bg: "bg-rose-950/40 text-rose-400 border-rose-800/50" },
   }[overallRisk] || { label: overallRisk, bg: "bg-slate-800 text-slate-300 border-slate-700" };

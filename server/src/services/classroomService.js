@@ -1,6 +1,7 @@
 import { google } from "googleapis";
 import { getAuthenticatedClient } from "./googleAuthService.js";
 import prisma from "../prisma.js";
+import { combineDueDateTime, calculateAssignmentRisk } from "./riskService.js";
 
 // Realistic sample courses with Subject Name and Subject Code
 export const SAMPLE_COURSES = [
@@ -58,7 +59,7 @@ export function getSampleAssignments(courses) {
     if (c.code) cMap[c.code] = c.id;
   });
 
-  return [
+  const sampleList = [
     {
       classroomCourseworkId: "asg-cs301-ps4",
       title: "Problem Set 4: Dynamic Programming & Graph Flows",
@@ -215,6 +216,11 @@ export function getSampleAssignments(courses) {
       ]
     }
   ];
+
+  return sampleList.map(item => ({
+    ...item,
+    deadlineRisk: calculateAssignmentRisk(item, now).riskLevel
+  }));
 }
 
 /**
@@ -296,21 +302,31 @@ export async function syncClassroomData(user) {
               continue;
             }
 
-            let dueDate = new Date();
+            let dueDate = null;
             let dueTime = "23:59";
             if (item.dueDate) {
-              dueDate.setFullYear(item.dueDate.year, (item.dueDate.month || 1) - 1, item.dueDate.day || 1);
+              const yr = item.dueDate.year;
+              const mo = item.dueDate.month || 1;
+              const dy = item.dueDate.day || 1;
               if (item.dueTime) {
                 const hh = String(item.dueTime.hours || 23).padStart(2, "0");
                 const mm = String(item.dueTime.minutes || 59).padStart(2, "0");
                 dueTime = `${hh}:${mm}`;
-                dueDate.setHours(item.dueTime.hours || 23, item.dueTime.minutes || 59, 0, 0);
-              } else {
-                dueDate.setHours(23, 59, 0, 0);
               }
+              const dateStr = `${yr}-${String(mo).padStart(2, "0")}-${String(dy).padStart(2, "0")}`;
+              dueDate = combineDueDateTime(dateStr, dueTime);
             } else {
-              dueDate.setDate(dueDate.getDate() + 7);
+              const d = new Date();
+              d.setDate(d.getDate() + 7);
+              dueDate = combineDueDateTime(d, "23:59");
             }
+
+            const initialRisk = calculateAssignmentRisk({
+              dueDate,
+              dueTime,
+              estimatedMinutes: 180,
+              difficulty: 3,
+            }, new Date());
 
             const attachments = (item.materials || []).map(m => {
               if (m.driveFile) return { name: m.driveFile.driveFile.title, url: m.driveFile.driveFile.alternateLink, mimeType: "application/pdf" };
@@ -330,6 +346,7 @@ export async function syncClassroomData(user) {
                 updateData.description = item.description;
                 updateData.dueDate = dueDate;
                 updateData.dueTime = dueTime;
+                updateData.deadlineRisk = initialRisk.riskLevel;
               }
 
               // NEVER overwrite COMPLETED with PENDING
@@ -342,7 +359,7 @@ export async function syncClassroomData(user) {
                 data: updateData,
               });
             } else {
-              // Insert new assignment
+              // Insert new assignment with calculated risk
               await prisma.assignment.create({
                 data: {
                   classroomCourseworkId: externalId,
@@ -353,6 +370,7 @@ export async function syncClassroomData(user) {
                   estimatedMinutes: 180,
                   difficulty: 3,
                   priority: "MEDIUM",
+                  deadlineRisk: initialRisk.riskLevel,
                   status: "PENDING",
                   courseId: course.id,
                   userId: user.id,

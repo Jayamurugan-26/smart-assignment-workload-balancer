@@ -1,5 +1,6 @@
 import prisma from "../prisma.js";
 import { fetchCalendarEvents } from "./calendarService.js";
+import { combineDueDateTime } from "./riskService.js";
 
 /**
  * Calculates genuine dashboard statistics from database records.
@@ -24,8 +25,12 @@ export async function getDashboardStatistics(userId) {
   const inProgress = allAssignments.filter(a => a.status === "IN_PROGRESS").length;
   const completed = allAssignments.filter(a => a.status === "COMPLETED").length;
   
-  // Overdue: not completed and dueDate has passed
-  const overdue = allAssignments.filter(a => a.status !== "COMPLETED" && new Date(a.dueDate) < now).length;
+  // Overdue: not completed and exact dueDateTime has passed
+  const overdue = allAssignments.filter(a => {
+    if (a.status === "COMPLETED") return false;
+    const dueDateTime = combineDueDateTime(a.dueDate, a.dueTime);
+    return dueDateTime ? dueDateTime < now : false;
+  }).length;
 
   const completionPercentage = total > 0 ? Math.round((completed / total) * 100) : 0;
 

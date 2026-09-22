@@ -218,6 +218,21 @@ export default function App() {
     loadData();
   }, [loadData]);
 
+  // Periodic background refresh (every 60s) to keep deadline risk & remaining time current
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      try {
+        const { assignments: activeList } = await api.getAssignments("ALL");
+        if (activeList) {
+          setAssignments(activeList.filter((a) => a.status !== "COMPLETED"));
+        }
+      } catch (e) {
+        // silent fail on background polling
+      }
+    }, 60000);
+    return () => clearInterval(timer);
+  }, []);
+
   const refreshStats = async () => {
     try {
       const statsData = await api.getStatistics();

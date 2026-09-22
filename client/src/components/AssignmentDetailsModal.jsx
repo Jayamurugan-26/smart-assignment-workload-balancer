@@ -21,6 +21,12 @@ import {
 } from "lucide-react";
 import { format } from "date-fns";
 import { api } from "../services/api";
+import { 
+  getResolvedRisk, 
+  RISK_THEMES, 
+  formatTimeRemaining, 
+  combineDueDateTime 
+} from "../utils/riskUtils.js";
 
 export default function AssignmentDetailsModal({ 
   assignment, 
@@ -38,7 +44,9 @@ export default function AssignmentDetailsModal({
   const [docAnalysisResults, setDocAnalysisResults] = useState({});
 
   const isCompleted = assignment.status === "COMPLETED";
-  const dueDateObj = new Date(assignment.dueDate);
+  const risk = getResolvedRisk(assignment);
+  const dueDateObj = combineDueDateTime(assignment.dueDate, assignment.dueTime) || new Date(assignment.dueDate);
+  const riskTheme = RISK_THEMES[risk.riskLevel] || RISK_THEMES.LOW;
 
   // Parse AI Analysis if stringified
   let aiData = null;
@@ -191,7 +199,103 @@ export default function AssignmentDetailsModal({
                   <span className="text-slate-500 dark:text-slate-400 block text-[11px] mb-1">Difficulty & Risk</span>
                   <div className="flex items-center gap-1.5">
                     <span className="font-bold text-slate-900 dark:text-white">{assignment.difficulty}/5</span>
-                    <span className="text-[10px] text-slate-500 dark:text-slate-400">• {assignment.deadlineRisk} Risk</span>
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${riskTheme.badge}`}>
+                      {risk.riskLevel}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Dedicated Deadline Risk & Urgency Analysis Card */}
+              <div className={`p-4 sm:p-5 rounded-2xl border transition-all ${
+                risk.isOverdue || risk.riskLevel === "CRITICAL"
+                  ? "bg-rose-50/50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-900/40"
+                  : risk.riskLevel === "HIGH"
+                    ? "bg-orange-50/40 dark:bg-orange-950/20 border-orange-200 dark:border-orange-900/40"
+                    : "bg-slate-50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700/60"
+              }`}>
+                {/* Header: Title & Score Badge */}
+                <div className="flex items-center justify-between gap-2 mb-3">
+                  <div className="flex items-center gap-2">
+                    <span className={`p-1.5 rounded-lg border ${riskTheme.badge}`}>
+                      <Flame className="w-4 h-4" />
+                    </span>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
+                        Deadline Risk Assessment
+                      </h4>
+                      <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                        {risk.isOverdue ? "Overdue deadline" : `${formatTimeRemaining(risk.remainingMinutes, risk.isOverdue)} until submission target`}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="text-right">
+                    <span className={`inline-flex items-center gap-1.5 text-xs font-extrabold px-2.5 py-1 rounded-lg border ${riskTheme.badge}`}>
+                      <span className={`w-2 h-2 rounded-full ${riskTheme.dot} ${risk.riskLevel === "CRITICAL" ? "animate-ping" : ""}`} />
+                      {risk.riskLevel} • {risk.riskScore}/100
+                    </span>
+                  </div>
+                </div>
+
+                {/* Score Progress Bar */}
+                <div className="space-y-1 mb-3">
+                  <div className="flex justify-between text-[11px] font-semibold text-slate-600 dark:text-slate-400">
+                    <span>Risk Index</span>
+                    <span>{risk.riskScore}%</span>
+                  </div>
+                  <div className="w-full bg-slate-200 dark:bg-slate-700/70 rounded-full h-2 overflow-hidden">
+                    <div 
+                      className={`h-2 rounded-full transition-all duration-500 ${riskTheme.bar}`} 
+                      style={{ width: `${Math.min(100, Math.max(5, risk.riskScore))}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* Dynamic "Why this risk?" explanation box */}
+                <div className={`p-3 rounded-xl border text-xs leading-relaxed flex items-start gap-2 ${
+                  risk.riskLevel === "CRITICAL"
+                    ? "bg-rose-100/60 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800/40 text-rose-800 dark:text-rose-200"
+                    : risk.riskLevel === "HIGH"
+                      ? "bg-orange-100/60 dark:bg-orange-950/40 border-orange-200 dark:border-orange-800/40 text-orange-800 dark:text-orange-200"
+                      : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300"
+                }`}>
+                  <AlertTriangle className={`w-4 h-4 mt-0.5 shrink-0 ${
+                    risk.riskLevel === "CRITICAL" ? "text-rose-600 dark:text-rose-400 animate-bounce" : "text-amber-500"
+                  }`} />
+                  <div>
+                    <strong className="font-semibold block mb-0.5">Why this risk level?</strong>
+                    <span>{risk.reason}</span>
+                  </div>
+                </div>
+
+                {/* Quick 3-point Metrics Grid */}
+                <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-slate-200/60 dark:border-slate-700/50 text-center">
+                  <div className="p-2 rounded-lg bg-white/70 dark:bg-slate-900/60 border border-slate-200/60 dark:border-slate-800/60">
+                    <span className="text-[10px] text-slate-500 uppercase font-semibold block">Time Left</span>
+                    <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                      {risk.isOverdue ? "0h (Passed)" : `${risk.remainingHours}h`}
+                    </span>
+                  </div>
+                  <div className="p-2 rounded-lg bg-white/70 dark:bg-slate-900/60 border border-slate-200/60 dark:border-slate-800/60">
+                    <span className="text-[10px] text-slate-500 uppercase font-semibold block">Estimated Work</span>
+                    <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                      {+(risk.estimatedCompletionMinutes / 60).toFixed(1)}h
+                    </span>
+                  </div>
+                  <div className="p-2 rounded-lg bg-white/70 dark:bg-slate-900/60 border border-slate-200/60 dark:border-slate-800/60">
+                    <span className="text-[10px] text-slate-500 uppercase font-semibold block">Load vs Time</span>
+                    <span className={`text-xs font-bold ${
+                      risk.isOverdue || risk.estimatedCompletionMinutes > risk.remainingMinutes
+                        ? "text-rose-600 dark:text-rose-400"
+                        : "text-emerald-600 dark:text-emerald-400"
+                    }`}>
+                      {risk.isOverdue 
+                        ? "Deficit" 
+                        : risk.remainingMinutes > 0 
+                          ? `${Math.round((risk.estimatedCompletionMinutes / risk.remainingMinutes) * 100)}%` 
+                          : "100%"}
+                    </span>
                   </div>
                 </div>
               </div>
