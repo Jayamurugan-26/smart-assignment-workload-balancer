@@ -5,6 +5,7 @@ import {
   chatWithGemini, 
   generateImageWithService 
 } from "../services/geminiService.js";
+import { orchestrator } from "../services/ai/aiOrchestrator.js";
 import prisma from "../prisma.js";
 
 const router = express.Router();
@@ -156,6 +157,20 @@ export async function handleAiChat(req, res) {
     });
   }
 }
+
+/**
+ * GET /api/ai/health
+ * Secure diagnostic health check for NEXYRA multi-engine AI providers.
+ * Returns provider readiness without exposing any API keys or credentials.
+ */
+router.get("/health", async (req, res) => {
+  try {
+    const health = await orchestrator.checkHealth();
+    res.json(health);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to check AI providers health", details: err.message });
+  }
+});
 
 /**
  * POST /api/ai/chat

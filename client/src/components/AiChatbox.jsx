@@ -135,6 +135,7 @@ export default function AiChatbox({ assignments = [], onNotify }) {
   const [previewImage, setPreviewImage] = useState(null);
   const [error, setError] = useState(null);
   const [copiedId, setCopiedId] = useState(null);
+  const [aiHealth, setAiHealth] = useState(null);
   const messagesEndRef = useRef(null);
 
   // Quick suggestion chips
@@ -147,9 +148,10 @@ export default function AiChatbox({ assignments = [], onNotify }) {
     "Generate an image of the solar system",
   ];
 
-  // Fetch chat history
+  // Fetch chat history and AI multi-engine status
   useEffect(() => {
     fetchHistory();
+    api.getAiHealth().then(setAiHealth).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -275,13 +277,18 @@ export default function AiChatbox({ assignments = [], onNotify }) {
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-base font-bold text-slate-900 dark:text-white">NEXYRA AI Assistant</h2>
-              <span className="flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+              <span 
+                className="flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 transition-all duration-300"
+                title={aiHealth?.totalProvidersConfigured ? `NEXYRA Multi-Engine Active: ${aiHealth.totalProvidersConfigured} providers ready with automatic failover` : "NEXYRA AI Engine Online"}
+              >
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                NEXYRA Live
+                {aiHealth?.totalProvidersConfigured && aiHealth.totalProvidersConfigured > 1
+                  ? `${aiHealth.totalProvidersConfigured} Engines Active`
+                  : "NEXYRA Live"}
               </span>
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Grounded in your real Google Classroom assignments & deadlines
+              Grounded in your real Google Classroom assignments & deadlines • High Availability
             </p>
           </div>
         </div>

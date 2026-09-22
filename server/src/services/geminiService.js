@@ -1,6 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import prisma from "../prisma.js";
 import { calculateAssignmentRisk } from "./riskService.js";
+import { orchestrator } from "./ai/aiOrchestrator.js";
 
 /**
  * Get configured GoogleGenAI instance.
@@ -71,48 +72,22 @@ async function generateContentWithFallback({ contents, systemInstruction, config
 }
 
 /**
- * 1. Intelligent Gemini AI Decomposition & Analysis
+ * 1. Intelligent AI Decomposition & Analysis (NEXYRA Multi-Engine)
  * Breaks down an assignment into actionable micro-tasks and evaluates realistic study time.
  */
 export async function analyzeAssignmentWithGemini({ title, description, rubric, subjectName }) {
-  const prompt = `You are an expert academic advisor and workload balancing AI.
-Analyze the following assignment for a university course and provide a JSON response.
-
-Course: ${subjectName || "Academic Course"}
-Assignment Title: ${title}
-Description: ${description || "No description provided"}
-Rubric / Notes: ${rubric || "Standard grading rubric"}
-
-Return ONLY a valid JSON object matching this schema:
-{
-  "difficulty": <number 1 to 5, where 1 is simple and 5 is very challenging>,
-  "estimatedMinutes": <integer total estimated minutes to complete thoroughly, e.g. 180>,
-  "priority": <"LOW" | "MEDIUM" | "HIGH" | "URGENT">,
-  "deadlineRisk": <"LOW" | "MODERATE" | "HIGH" | "CRITICAL">,
-  "summary": <concise 2-sentence summary of the task>,
-  "keyFocusAreas": [<array of 3 strings highlighting critical concepts>],
-  "tips": <actionable study strategy tip>,
-  "microTasks": [
-    {
-      "title": <string step name>,
-      "durationMinutes": <integer minutes, 30 to 90 mins each>,
-      "orderIndex": <integer 0, 1, 2...>
-    }
-  ]
-}`;
-
   try {
-    const res = await generateContentWithFallback({
-      contents: prompt,
-      systemInstruction: "You are an expert academic advisor. Output pure valid JSON only without markdown formatting.",
+    const res = await orchestrator.analyzeAssignmentJson({
+      title,
+      description,
+      rubric,
+      subjectName,
     });
-
-    const jsonMatch = res.text.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
+    if (res && res.analysis) {
+      return res.analysis;
     }
   } catch (err) {
-    console.warn("Gemini decomposition failed, using intelligent fallback:", err.message);
+    console.warn("[NEXYRA AI] Multi-provider decomposition error, using intelligent fallback:", err.message);
   }
 
   return getFallbackAIAnalysis(title, description, subjectName);
@@ -181,125 +156,53 @@ INSTRUCTIONS:
 8. Format responses cleanly with markdown, bullet points, and bold text.`;
 
   try {
-    // Format conversation history for @google/genai with strict role alternation
-    const rawTurns = [];
+    const recentHistory = history.slice(-8).map(msg => ({
+      role: msg.role === "assistant" || msg.role === "model" ? "assistant" : "user",
+      content: (msg.content || "").trim(),
+    })).filter(m => m.content);
 
-    // Include past valid turns (last 8 messages)
-    const recentHistory = history.slice(-8);
-    for (const msg of recentHistory) {
-      if (msg.content && msg.content.trim()) {
-        rawTurns.push({
-          role: msg.role === "assistant" ? "model" : "user",
-          text: msg.content.trim()
-        });
-      }
-    }
+    recentHistory.push({ role: "user", content: message.trim() });
 
-    // Append current user message
-    rawTurns.push({
-      role: "user",
-      text: message.trim()
-    });
-
-    // Clean and alternate turns strictly (user -> model -> user ...)
-    const formattedContents = [];
-    for (const turn of rawTurns) {
-      // Must start with a user turn
-      if (formattedContents.length === 0) {
-        if (turn.role === "user") {
-          formattedContents.push({ role: "user", parts: [{ text: turn.text }] });
-        }
-        continue;
-      }
-
-      const prevTurn = formattedContents[formattedContents.length - 1];
-      if (prevTurn.role === turn.role) {
-        // Merge consecutive same-role turns
-        prevTurn.parts[0].text += `\n\n${turn.text}`;
-      } else {
-        formattedContents.push({ role: turn.role, parts: [{ text: turn.text }] });
-      }
-    }
-
-    // Ensure at least the current user turn is present
-    if (formattedContents.length === 0 || formattedContents[formattedContents.length - 1].role !== "user") {
-      formattedContents.push({ role: "user", parts: [{ text: message.trim() }] });
-    }
-
-    const result = await generateContentWithFallback({
-      contents: formattedContents,
+    const result = await orchestrator.chat({
+      messages: recentHistory,
       systemInstruction,
     });
 
     return {
-      reply: result.text,
+      reply: result.reply,
       modelUsed: "NEXYRA AI",
     };
   } catch (err) {
-    console.warn("NEXYRA AI API call error, falling back to local reasoning engine:", err.message);
+    console.warn("[NEXYRA AI] Multi-provider chat error, falling back to local reasoning engine:", err.message);
   }
 
-  // Fallback to local deterministic reasoning if Gemini API is unreachable
+  // Fallback to local deterministic reasoning if all AI providers are unreachable
   return generateDeterministicChatReply(message, activeAssignments, completedAssignments, now);
 }
 
 /**
- * 3. Photo & Document Analysis with Gemini Multimodal
+ * 3. Photo & Document Analysis (NEXYRA Multi-Engine)
  * Supports images (PNG, JPEG, WebP) and PDF documents.
  */
 export async function analyzeDocumentWithGemini({ buffer, mimeType, fileName, assignmentContext = null }) {
-  const prompt = `You are an expert academic evaluator. Analyze the attached student document/file (${fileName}).
-${assignmentContext ? `Associated Assignment Context: ${JSON.stringify(assignmentContext)}` : ""}
-
-Carefully examine all readable content and return ONLY a valid JSON object matching this structure:
-{
-  "summary": "<comprehensive 2-3 paragraph summary of the document>",
-  "importantPoints": ["<key concept 1>", "<key concept 2>", "<key concept 3>", "<key concept 4>"],
-  "assignmentRequirements": ["<requirement 1>", "<requirement 2>", "<requirement 3>"],
-  "keyTasksOrQuestions": ["<question/task 1>", "<question/task 2>"],
-  "importantDatesOrInstructions": ["<instruction/date 1>", "<instruction/date 2>"],
-  "difficultSections": ["<identified challenging area 1>", "<identified challenging area 2>"],
-  "suggestedApproach": "<detailed step-by-step strategy for tackling this assignment or document>",
-  "studyBreakdown": [
-    { "phase": "Phase 1: Preparation", "estimatedHours": 1.5, "tasks": ["Task A", "Task B"] },
-    { "phase": "Phase 2: Execution", "estimatedHours": 3.0, "tasks": ["Task C", "Task D"] },
-    { "phase": "Phase 3: Review", "estimatedHours": 1.0, "tasks": ["Task E"] }
-  ],
-  "extractedTextPreview": "<first 300 characters of readable text>"
-}`;
-
   if (buffer) {
     try {
-      const contents = [
-        {
-          role: "user",
-          parts: [
-            { text: prompt },
-            {
-              inlineData: {
-                data: buffer.toString("base64"),
-                mimeType: mimeType || "application/pdf"
-              }
-            }
-          ]
-        }
-      ];
-
-      const res = await generateContentWithFallback({
-        contents,
-        systemInstruction: "You are an expert academic evaluator. Return pure JSON only.",
+      const res = await orchestrator.analyzeDocumentMultimodal({
+        buffer,
+        mimeType,
+        fileName,
+        assignmentContext,
       });
 
-      const jsonMatch = res.text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
+      if (res && res.analysis) {
         return {
           success: true,
-          analysis: JSON.parse(jsonMatch[0]),
-          modelUsed: res.modelUsed,
+          analysis: res.analysis,
+          modelUsed: "NEXYRA AI",
         };
       }
     } catch (err) {
-      console.warn("Multimodal Gemini analysis failed:", err.message);
+      console.warn("[NEXYRA AI] Multi-provider multimodal analysis error, falling back:", err.message);
     }
   }
 
@@ -311,48 +214,31 @@ Carefully examine all readable content and return ONLY a valid JSON object match
 }
 
 /**
- * 4. Image Generation Service
- * Invokes Imagen 3 if configured, or academic synthesis engine.
+ * 4. Image Generation Service (NEXYRA Multi-Engine)
+ * Routes to image-capable providers (Imagen 3, DALL-E) or academic visualizer.
  */
 export async function generateImageWithService({ prompt, userId }) {
-  const aiClient = getGenAIClient();
-
-  if (aiClient) {
-    try {
-      const response = await aiClient.models.generateImages({
-        model: "imagen-3.0-generate-002",
-        prompt: prompt,
-        config: {
-          numberOfImages: 1,
-          aspectRatio: "1:1",
-        }
-      });
-
-      if (response.generatedImages && response.generatedImages.length > 0) {
-        const imgBytes = response.generatedImages[0].image.imageBytes;
-        const base64Data = `data:image/png;base64,${imgBytes}`;
-        return {
-          success: true,
-          imageUrl: base64Data,
-          modelUsed: "NEXYRA Image Engine",
-          prompt
-        };
-      }
-    } catch (err) {
-      console.warn("NEXYRA Image generation failed, falling back to visualizer:", err.message);
-    }
+  try {
+    const res = await orchestrator.generateImage({ prompt });
+    return {
+      success: true,
+      imageUrl: res.imageUrl,
+      modelUsed: res.modelUsed || "NEXYRA Image Engine",
+      prompt: res.prompt || prompt,
+    };
+  } catch (err) {
+    console.warn("[NEXYRA AI] Multi-provider image generation failed, falling back:", err.message);
   }
 
-  // Safe academic image generation engine (Pollinations AI text-to-image API)
   const seed = Math.floor(Math.random() * 1000000);
-  const cleanPrompt = encodeURIComponent(prompt.trim());
+  const cleanPrompt = encodeURIComponent((prompt || "academic concept").trim());
   const fallbackUrl = `https://image.pollinations.ai/prompt/${cleanPrompt}?width=800&height=800&nologo=true&seed=${seed}`;
 
   return {
     success: true,
     imageUrl: fallbackUrl,
     modelUsed: "NEXYRA Image Engine",
-    prompt
+    prompt,
   };
 }
 

@@ -83,6 +83,7 @@ export const api = {
 
   // NEXYRA AI Chatbox
   getChatHistory: () => request("/ai/chat/history"),
+  getAiHealth: () => request("/ai/health"),
   sendChatMessage: (payload) =>
     request("/ai/chat", {
       method: "POST",
